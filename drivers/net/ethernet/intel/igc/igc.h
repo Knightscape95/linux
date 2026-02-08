@@ -346,6 +346,10 @@ struct igc_adapter {
 	struct mutex led_mutex;
 	struct igc_led_classdev *leds;
 	bool leds_available;
+
+	/* PCIe link recovery */
+	unsigned int pcie_recovery_attempts;
+	unsigned long last_recovery_time;
 };
 
 void igc_up(struct igc_adapter *adapter);
