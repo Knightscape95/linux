@@ -2513,8 +2513,8 @@ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x1508, quirk_disable_aspm_l0s);
 
 /*
  * Intel I225/I226 Ethernet controllers can experience PCIe link loss issues
- * with ASPM L1 enabled. Disable ASPM L0s to improve link stability while
- * allowing L1 for power savings. The driver handles L1.2 separately.
+ * with certain ASPM states enabled. Disable ASPM L0s to improve link stability
+ * while allowing L1 for power savings. The driver handles L1.2 separately.
  */
 static void quirk_igc_aspm(struct pci_dev *dev)
 {

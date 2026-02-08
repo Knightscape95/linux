@@ -30,6 +30,10 @@
 #define IGC_XDP_TX		BIT(1)
 #define IGC_XDP_REDIRECT	BIT(2)
 
+/* PCIe link recovery constants */
+#define IGC_REGISTER_READ_RETRIES	3
+#define IGC_MAX_PCIE_RECOVERY_ATTEMPTS	10
+
 static int debug = -1;
 
 MODULE_DESCRIPTION(DRV_SUMMARY);
@@ -7008,6 +7012,14 @@ static bool igc_pcie_link_recover(struct igc_adapter *igc)
 		return false;
 
 	igc->last_recovery_time = now;
+
+	/* Limit recovery attempts to prevent infinite loops */
+	if (igc->pcie_recovery_attempts >= IGC_MAX_PCIE_RECOVERY_ATTEMPTS) {
+		netdev_err(netdev, "PCIe link recovery failed after %u attempts\n",
+			   igc->pcie_recovery_attempts);
+		return false;
+	}
+
 	igc->pcie_recovery_attempts++;
 
 	/* Check if device is still present on the bus */
@@ -7045,13 +7057,6 @@ static bool igc_pcie_link_recover(struct igc_adapter *igc)
 		return true;
 	}
 
-	/* Limit recovery attempts to prevent infinite loops */
-	if (igc->pcie_recovery_attempts > 10) {
-		netdev_err(netdev, "PCIe link recovery failed after %u attempts\n",
-			   igc->pcie_recovery_attempts);
-		return false;
-	}
-
 	return false;
 }
 
@@ -7072,7 +7077,7 @@ u32 igc_rd32(struct igc_hw *hw, u32 reg)
 		struct net_device *netdev = igc->netdev;
 
 		/* Attempt recovery before marking device as failed */
-		for (retry = 0; retry < 3; retry++) {
+		for (retry = 0; retry < IGC_REGISTER_READ_RETRIES; retry++) {
 			/* Small delay before retry */
 			usleep_range(100, 200);
 
