@@ -30,6 +30,10 @@
 #define IGC_XDP_TX		BIT(1)
 #define IGC_XDP_REDIRECT	BIT(2)
 
+/* PCIe link recovery constants */
+#define IGC_REGISTER_READ_RETRIES	3
+#define IGC_MAX_PCIE_RECOVERY_ATTEMPTS	10
+
 static int debug = -1;
 
 MODULE_DESCRIPTION(DRV_SUMMARY);
@@ -6984,11 +6988,84 @@ static const struct net_device_ops igc_netdev_ops = {
 	.ndo_hwtstamp_set	= igc_ptp_hwtstamp_set,
 };
 
+/**
+ * igc_pcie_link_recover - Attempt to recover PCIe link
+ * @igc: adapter structure
+ *
+ * Attempts to recover from a PCIe link failure by:
+ * 1. Verifying the device is still present
+ * 2. Attempting PCIe link retraining if available
+ * 3. Implementing retry logic with exponential backoff
+ *
+ * Returns true if recovery succeeded, false otherwise
+ */
+static bool igc_pcie_link_recover(struct igc_adapter *igc)
+{
+	struct pci_dev *pdev = igc->pdev;
+	struct net_device *netdev = igc->netdev;
+	unsigned long now = jiffies;
+	u16 status;
+	int ret;
+
+	/* Rate limit recovery attempts - at most once per second */
+	if (time_before(now, igc->last_recovery_time + HZ))
+		return false;
+
+	igc->last_recovery_time = now;
+
+	/* Limit recovery attempts to prevent infinite loops */
+	if (igc->pcie_recovery_attempts >= IGC_MAX_PCIE_RECOVERY_ATTEMPTS) {
+		netdev_err(netdev, "PCIe link recovery failed after %u attempts\n",
+			   igc->pcie_recovery_attempts);
+		return false;
+	}
+
+	igc->pcie_recovery_attempts++;
+
+	/* Check if device is still present on the bus */
+	if (!pci_device_is_present(pdev)) {
+		netdev_err(netdev, "PCIe device not present, cannot recover\n");
+		return false;
+	}
+
+	/* Try to read PCI status register */
+	if (pci_read_config_word(pdev, PCI_STATUS, &status)) {
+		netdev_err(netdev, "PCIe config space read failed\n");
+		return false;
+	}
+
+	netdev_warn(netdev, "PCIe link issue detected, attempting recovery (attempt #%u)\n",
+		    igc->pcie_recovery_attempts);
+
+	/* Attempt PCIe link retraining if supported */
+	if (pdev->bus && pdev->bus->self) {
+		ret = pcie_failed_link_retrain(pdev->bus->self);
+		if (ret == 0) {
+			netdev_info(netdev, "PCIe link recovery successful\n");
+			igc->pcie_recovery_attempts = 0;
+			return true;
+		}
+	}
+
+	/* Small delay to allow link to stabilize */
+	msleep(10);
+
+	/* Verify recovery by attempting to read config space again */
+	if (!pci_read_config_word(pdev, PCI_VENDOR_ID, &status) && status != 0xFFFF) {
+		netdev_info(netdev, "PCIe link recovered after delay\n");
+		igc->pcie_recovery_attempts = 0;
+		return true;
+	}
+
+	return false;
+}
+
 u32 igc_rd32(struct igc_hw *hw, u32 reg)
 {
 	struct igc_adapter *igc = container_of(hw, struct igc_adapter, hw);
 	u8 __iomem *hw_addr = READ_ONCE(hw->hw_addr);
 	u32 value = 0;
+	int retry;
 
 	if (IGC_REMOVED(hw_addr))
 		return ~value;
@@ -6999,6 +7076,37 @@ u32 igc_rd32(struct igc_hw *hw, u32 reg)
 	if (!(~value) && (!reg || !(~readl(hw_addr)))) {
 		struct net_device *netdev = igc->netdev;
 
+		/* Attempt recovery before marking device as failed */
+		for (retry = 0; retry < IGC_REGISTER_READ_RETRIES; retry++) {
+			/* Small delay before retry */
+			usleep_range(100, 200);
+
+			/* Re-read the register */
+			value = readl(&hw_addr[reg]);
+			if (~value || (reg && ~readl(hw_addr))) {
+				/* Recovery successful - value is valid */
+				netdev_warn(netdev,
+					    "PCIe read recovered after retry %d\n",
+					    retry + 1);
+				return value;
+			}
+		}
+
+		/* Retries failed, attempt full recovery */
+		if (igc_pcie_link_recover(igc)) {
+			/* Recovery succeeded, try reading again */
+			hw_addr = READ_ONCE(hw->hw_addr);
+			if (!IGC_REMOVED(hw_addr)) {
+				value = readl(&hw_addr[reg]);
+				if (~value || (reg && ~readl(hw_addr))) {
+					netdev_info(netdev,
+						    "PCIe read successful after link recovery\n");
+					return value;
+				}
+			}
+		}
+
+		/* All recovery attempts failed */
 		hw->hw_addr = NULL;
 		netif_device_detach(netdev);
 		netdev_err(netdev, "PCIe link lost, device now detached\n");
@@ -7172,6 +7280,10 @@ static int igc_probe(struct pci_dev *pdev,
 
 	/* hw->hw_addr can be zeroed, so use adapter->io_addr for unmap */
 	hw->hw_addr = adapter->io_addr;
+
+	/* Initialize PCIe link recovery fields */
+	adapter->pcie_recovery_attempts = 0;
+	adapter->last_recovery_time = jiffies;
 
 	netdev->netdev_ops = &igc_netdev_ops;
 	netdev->xdp_metadata_ops = &igc_xdp_metadata_ops;

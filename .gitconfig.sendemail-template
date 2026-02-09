@@ -1,0 +1,108 @@
+# Git Configuration Template for Kernel Development
+# Copy relevant sections to your ~/.gitconfig or use git config commands
+
+[user]
+	name = Your Full Name
+	email = your.email@example.com
+
+[sendemail]
+	# SMTP Server Configuration
+	# Choose one of the following configurations:
+	
+	# --- Gmail ---
+	smtpserver = smtp.gmail.com
+	smtpserverport = 587
+	smtpencryption = tls
+	smtpuser = your.email@gmail.com
+	# Note: Use App Password from https://myaccount.google.com/apppasswords
+	
+	# --- Outlook/Microsoft 365 ---
+	# smtpserver = smtp-mail.outlook.com
+	# smtpserverport = 587
+	# smtpencryption = tls
+	# smtpuser = your.email@outlook.com
+	
+	# --- Custom SMTP ---
+	# smtpserver = mail.yourcompany.com
+	# smtpserverport = 587
+	# smtpencryption = tls
+	# smtpuser = your.email@yourcompany.com
+	
+	# --- Local Sendmail ---
+	# smtpserver = /usr/sbin/sendmail
+	
+	# Behavior Configuration
+	confirm = always              # Always confirm before sending
+	chainreplyto = false          # Don't chain replies
+	thread = true                 # Use threading for patch series
+	suppresscc = self             # Don't CC yourself via From/Signed-off-by
+	cc = your.email@example.com   # Always CC this address
+	annotate = false              # Don't annotate patches
+	
+	# Optional: Store credentials (less secure)
+	# smtppass = your-app-password-here
+
+[format]
+	# Patch format configuration
+	signoff = true                # Always add Signed-off-by
+	coverLetter = auto            # Auto-generate cover letter for series
+	outputDirectory = /tmp/patches # Where to save patches
+	
+[alias]
+	# Useful aliases for kernel development
+	fp = format-patch             # Shorthand for format-patch
+	se = send-email               # Shorthand for send-email
+	
+	# Format patch for last commit
+	fp1 = format-patch -1
+	
+	# Format last N commits with cover letter
+	fp3 = format-patch -3 --cover-letter
+	
+	# Get maintainers for a patch
+	maintainers = !sh -c './scripts/get_maintainer.pl $1' -
+	
+	# Check patch with checkpatch.pl
+	checkpatch = !sh -c './scripts/checkpatch.pl $1' -
+	
+	# Send patch with auto-detected maintainers
+	send-to-maintainers = !sh -c 'git send-email --to-cmd=\"./scripts/get_maintainer.pl --to\" --cc-cmd=\"./scripts/get_maintainer.pl --cc\" $1' -
+	
+	# Test send (to yourself)
+	test-send = !sh -c 'git send-email --to $(git config user.email) $1' -
+	
+	# One-liner to check and show maintainers
+	patch-ready = !sh -c 'echo \"Running checkpatch...\" && ./scripts/checkpatch.pl $1 && echo \"\" && echo \"Maintainers:\" && ./scripts/get_maintainer.pl $1' -
+
+[core]
+	# Editor for commit messages
+	editor = vim
+	
+	# Enable color output
+	pager = less -F -X
+
+[color]
+	ui = auto
+
+[credential]
+	# Optional: Use credential helper to cache passwords
+	# helper = cache --timeout=3600  # Cache for 1 hour
+	# helper = store                 # Store permanently (less secure)
+	# helper = libsecret            # Use system keyring (most secure)
+
+# Example usage:
+#
+# 1. Copy this file to ~/.gitconfig.kernel and merge relevant sections:
+#    $ cat ~/.gitconfig.kernel >> ~/.gitconfig
+#
+# 2. Or set values individually:
+#    $ git config --global sendemail.smtpserver smtp.gmail.com
+#    $ git config --global sendemail.smtpuser your.email@gmail.com
+#
+# 3. Test configuration:
+#    $ git config --list | grep sendemail
+#
+# 4. Use aliases:
+#    $ git fp1                    # Create patch from last commit
+#    $ git maintainers 0001-*.patch   # Show maintainers
+#    $ git test-send 0001-*.patch     # Test by sending to yourself

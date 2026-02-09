@@ -1,0 +1,233 @@
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃          GIT SEND-EMAIL QUICK REFERENCE FOR KERNEL PATCHES                 ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ INITIAL SETUP                                                             ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Run interactive setup:
+    $ ./setup-git-sendemail.sh
+
+  Or configure manually:
+    $ git config --global sendemail.smtpserver smtp.gmail.com
+    $ git config --global sendemail.smtpuser your.email@gmail.com
+    $ git config --global sendemail.confirm always
+
+  Read full guide:
+    $ less .git-send-email-setup.md
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ CREATING PATCHES                                                          ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Single patch from last commit:
+    $ git format-patch -1
+
+  Patch series (last 3 commits):
+    $ git format-patch -3
+
+  Patch series with cover letter:
+    $ git format-patch -3 --cover-letter
+
+  Specific commit range:
+    $ git format-patch <base-commit>..<head-commit>
+
+  Send to stdout (preview):
+    $ git format-patch -1 --stdout
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ FINDING MAINTAINERS                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  For a file:
+    $ ./scripts/get_maintainer.pl -f drivers/net/ethernet/intel/igc/igc_main.c
+
+  For a patch:
+    $ ./scripts/get_maintainer.pl 0001-your-patch.patch
+
+  For current changes (unstaged):
+    $ git diff | ./scripts/get_maintainer.pl
+
+  Get only emails (for --to flag):
+    $ ./scripts/get_maintainer.pl --to 0001-your-patch.patch
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ CHECKING PATCHES                                                          ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Check patch style:
+    $ ./scripts/checkpatch.pl 0001-your-patch.patch
+
+  Check with strict rules:
+    $ ./scripts/checkpatch.pl --strict 0001-your-patch.patch
+
+  Check specific commit:
+    $ ./scripts/checkpatch.pl -g HEAD
+
+  Check all patches:
+    $ ./scripts/checkpatch.pl *.patch
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ SENDING PATCHES                                                           ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Test send to yourself:
+    $ git send-email --to your.email@example.com 0001-*.patch
+
+  Send single patch:
+    $ git send-email --to maintainer@example.com \
+                     --cc linux-kernel@vger.kernel.org \
+                     0001-your-patch.patch
+
+  Send patch series:
+    $ git send-email --to maintainer@example.com \
+                     --cc linux-kernel@vger.kernel.org \
+                     *.patch
+
+  Auto-detect maintainers:
+    $ git send-email --to-cmd='./scripts/get_maintainer.pl --to' \
+                     --cc-cmd='./scripts/get_maintainer.pl --cc' \
+                     0001-your-patch.patch
+
+  Dry run (test without sending):
+    $ git send-email --dry-run *.patch
+
+  Send v2 revision:
+    $ git send-email --subject-prefix="PATCH v2" \
+                     --to maintainer@example.com \
+                     *.patch
+
+  Reply to previous discussion:
+    $ git send-email --in-reply-to="<message-id@example.com>" \
+                     --to maintainer@example.com \
+                     0001-your-patch.patch
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ COMMON WORKFLOWS                                                          ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  1. FIRST PATCH - Complete workflow:
+     $ git add modified_file.c
+     $ git commit -s
+     $ git format-patch -1
+     $ ./scripts/checkpatch.pl 0001-*.patch
+     $ ./scripts/get_maintainer.pl 0001-*.patch
+     $ git send-email --to yourself@example.com 0001-*.patch  # TEST!
+     $ git send-email --to-cmd='./scripts/get_maintainer.pl --to' \
+                      --cc-cmd='./scripts/get_maintainer.pl --cc' \
+                      0001-*.patch
+
+  2. PATCH SERIES - Multi-commit feature:
+     $ git format-patch -3 --cover-letter
+     $ vi 0000-cover-letter.patch  # Edit cover letter
+     $ ./scripts/checkpatch.pl *.patch
+     $ ./scripts/get_maintainer.pl *.patch
+     $ git send-email --to yourself@example.com *.patch  # TEST!
+     $ git send-email --to maintainer@example.com \
+                      --cc linux-kernel@vger.kernel.org \
+                      *.patch
+
+  3. PATCH REVISION - Sending v2:
+     $ git format-patch -1 -v2
+     $ vi 0001-*.patch  # Add changelog: "v2: Fixed ..."
+     $ git send-email --subject-prefix="PATCH v2" \
+                      --in-reply-to="<v1-message-id>" \
+                      --to maintainer@example.com \
+                      0001-*.patch
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ USEFUL GIT CONFIG OPTIONS                                                 ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  View current config:
+    $ git config --list | grep sendemail
+
+  Essential settings:
+    sendemail.smtpserver       = smtp.gmail.com
+    sendemail.smtpserverport   = 587
+    sendemail.smtpencryption   = tls
+    sendemail.smtpuser         = your.email@gmail.com
+    sendemail.confirm          = always
+    sendemail.chainreplyto     = false
+    sendemail.thread           = true
+    sendemail.cc               = your.email@gmail.com
+    format.signoff             = true
+
+  Reset a setting:
+    $ git config --global --unset sendemail.smtpserver
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ COMMIT MESSAGE FORMAT                                                     ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  subsystem: Short summary (< 70 chars)
+  
+  Longer description explaining the problem, why this change is needed,
+  and what this patch does. Wrap at 72 characters per line.
+  
+  Include any relevant details like:
+  - What was the bug/issue?
+  - What is the impact?
+  - How does this fix it?
+  
+  Link: https://bugzilla.kernel.org/show_bug.cgi?id=12345
+  Fixes: commit-hash ("commit subject")
+  Reported-by: Reporter Name <reporter@example.com>
+  Suggested-by: Reviewer Name <reviewer@example.com>
+  Tested-by: Tester Name <tester@example.com>
+  Reviewed-by: Reviewer Name <reviewer@example.com>
+  Acked-by: Acker Name <acker@example.com>
+  Signed-off-by: Your Name <your.email@example.com>
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ TROUBLESHOOTING                                                           ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Email not sending:
+    - Check SMTP settings: git config --list | grep sendemail
+    - Verify credentials (use App Password for Gmail)
+    - Test SMTP manually: telnet smtp.gmail.com 587
+
+  Authentication errors:
+    - Gmail: Generate App Password at myaccount.google.com/apppasswords
+    - Outlook: Enable SMTP in account settings
+    - Check username matches email exactly
+
+  Format issues:
+    - Use --dry-run to preview
+    - Send test email to yourself first
+    - Check with checkpatch.pl before sending
+
+  SSL/TLS errors:
+    $ git config --global sendemail.smtpsslcertpath /etc/ssl/certs
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ IMPORTANT MAILING LISTS                                                   ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  linux-kernel@vger.kernel.org      - Main kernel list (always CC)
+  linux-netdev@vger.kernel.org      - Networking subsystem
+  linux-wireless@vger.kernel.org    - Wireless
+  linux-fsdevel@vger.kernel.org     - Filesystems
+  linux-pci@vger.kernel.org         - PCI subsystem
+  
+  Subscribe at: https://subspace.kernel.org/subscribing.html
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ RESOURCES                                                                 ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Interactive tutorial:    https://git-send-email.io
+  Kernel documentation:    Documentation/process/submitting-patches.rst
+  Email clients guide:     Documentation/process/email-clients.rst
+  Coding style:            Documentation/process/coding-style.rst
+  Submit checklist:        Documentation/process/submit-checklist.rst
+  
+  Get help:
+    - IRC: #kernelnewbies on OFTC
+    - Mailing list: kernelnewbies@kernelnewbies.org
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  Keep this reference handy! Save as: .git-send-email-cheatsheet.txt      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

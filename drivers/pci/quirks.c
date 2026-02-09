@@ -2511,6 +2511,26 @@ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x10f1, quirk_disable_aspm_l0s);
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x10f4, quirk_disable_aspm_l0s);
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x1508, quirk_disable_aspm_l0s);
 
+/*
+ * Intel I225/I226 Ethernet controllers can experience PCIe link loss issues
+ * with certain ASPM states enabled. Disable ASPM L0s to improve link stability
+ * while allowing L1 for power savings. The driver handles L1.2 separately.
+ */
+static void quirk_igc_aspm(struct pci_dev *dev)
+{
+	pcie_aspm_remove_cap(dev, PCI_EXP_LNKCAP_ASPM_L0S);
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f2, quirk_igc_aspm); /* I225_LM */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f3, quirk_igc_aspm); /* I225_V */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f8, quirk_igc_aspm); /* I225_I */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f7, quirk_igc_aspm); /* I220_V */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x3100, quirk_igc_aspm); /* I225_K */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x3101, quirk_igc_aspm); /* I225_K2 */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x3102, quirk_igc_aspm); /* I226_K */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x5502, quirk_igc_aspm); /* I225_LMVP */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x5503, quirk_igc_aspm); /* I226_LMVP */
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x0d9f, quirk_igc_aspm); /* I225_IT */
+
 static void quirk_disable_aspm_l0s_l1(struct pci_dev *dev)
 {
 	pcie_aspm_remove_cap(dev,
