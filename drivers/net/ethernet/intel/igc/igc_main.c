@@ -7003,7 +7003,7 @@ static bool igc_pcie_link_recover(struct igc_adapter *igc)
 	struct pci_dev *pdev = igc->pdev;
 	struct net_device *netdev = igc->netdev;
 	unsigned long now = jiffies;
-	u16 status;
+	u16 val;
 
 	/* Rate limit: at most once per second */
 	if (time_before(now, igc->last_recovery_time + HZ))
@@ -7028,12 +7028,6 @@ static bool igc_pcie_link_recover(struct igc_adapter *igc)
 		return false;
 	}
 
-	if (pci_read_config_word(pdev, PCI_STATUS, &status)) {
-		netdev_err(netdev,
-			   "PCIe config space read failed\n");
-		return false;
-	}
-
 	netdev_warn(netdev,
 		    "PCIe link issue, recovery attempt #%u\n",
 		    igc->pcie_recovery_attempts);
@@ -7041,10 +7035,13 @@ static bool igc_pcie_link_recover(struct igc_adapter *igc)
 	/* Small delay to allow link to stabilize */
 	msleep(10);
 
-	/* Verify recovery via config space read */
+	/*
+	 * Verify recovery by reading vendor ID.
+	 * PCI_POSSIBLE_ERROR indicates device unreachable.
+	 */
 	if (!pci_read_config_word(pdev, PCI_VENDOR_ID,
-				  &status) &&
-	    status != 0xFFFF) {
+				  &val) &&
+	    !PCI_POSSIBLE_ERROR(val)) {
 		netdev_info(netdev,
 			    "PCIe link recovered after delay\n");
 		igc->pcie_recovery_attempts = 0;
