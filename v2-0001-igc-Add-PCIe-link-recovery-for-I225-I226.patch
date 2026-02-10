@@ -1,0 +1,243 @@
+From a85c210b040de9cbd830cf5f73838fe3fa4a723f Mon Sep 17 00:00:00 2001
+From: Knightscape95 <138029863+Knightscape95@users.noreply.github.com>
+Date: Tue, 10 Feb 2026 19:48:37 +0000
+Subject: [PATCH net-next v2] igc: Add PCIe link recovery for I225/I226
+
+Add retry logic and recovery mechanism to igc_rd32() to prevent
+permanent device detachment on transient PCIe link issues for
+Intel I225/I226 Ethernet controllers.
+
+The I225/I226 NICs can experience intermittent PCIe link loss,
+particularly with ASPM L0s enabled. Currently, when igc_rd32()
+reads all-F's, it immediately marks the device as failed with no
+recovery attempt. This patch adds:
+
+1. Register read retries with short delays before escalating
+2. A rate-limited PCIe link recovery function that verifies device
+   presence and allows the link to stabilize
+3. PCI quirks to disable ASPM L0s for all 16 I225/I226 device IDs,
+   preserving L1 for power savings
+
+Changes since v1:
+- Fix kdoc: use proper /** */ format with @param and Return: tags
+- Fix checkpatch: all lines within 80-column limit
+- Fix API: use public PCI API only (drop pcie_failed_link_retrain)
+- Use PCI_POSSIBLE_ERROR() macro instead of magic 0xFFFF
+- Reuse existing quirk_disable_aspm_l0s() instead of adding new func
+- Add all 16 I225/I226 device IDs from igc_hw.h (was only 7 in v1)
+
+Signed-off-by: Knightscape95 <138029863+Knightscape95@users.noreply.github.com>
+---
+ drivers/net/ethernet/intel/igc/igc.h      |   3 +
+ drivers/net/ethernet/intel/igc/igc_main.c | 100 ++++++-
+ drivers/pci/quirks.c                      |  38 +++++++
+ 3 files changed, 140 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/igc/igc.h b/drivers/net/ethernet/intel/igc/igc.h
+index a427f0581..db5d440e7 100644
+--- a/drivers/net/ethernet/intel/igc/igc.h
++++ b/drivers/net/ethernet/intel/igc/igc.h
+@@ -347,6 +347,9 @@
+ 	struct igc_led_classdev *leds;
+ 	bool leds_available;
+ 
++	/* PCIe link recovery */
++	unsigned int pcie_recovery_attempts;
++	unsigned long last_recovery_time;
+ };
+ 
+ void igc_up(struct igc_adapter *adapter);
+
+diff --git a/drivers/net/ethernet/intel/igc/igc_main.c b/drivers/net/ethernet/intel/igc/igc_main.c
+index 89a321a34..a5c95a79b 100644
+--- a/drivers/net/ethernet/intel/igc/igc_main.c
++++ b/drivers/net/ethernet/intel/igc/igc_main.c
+@@ -30,6 +30,9 @@
+ #define IGC_XDP_TX		BIT(1)
+ #define IGC_XDP_REDIRECT	BIT(2)
+ 
++/* PCIe link recovery constants */
++#define IGC_REGISTER_READ_RETRIES	3
++#define IGC_MAX_PCIE_RECOVERY_ATTEMPTS	10
+ 
+ static int debug = -1;
+ 
+@@ -6985,12 +6988,75 @@
+ 	.ndo_hwtstamp_set	= igc_ptp_hwtstamp_set,
+ };
+ 
++/**
++ * igc_pcie_link_recover - attempt to recover PCIe link
++ * @igc: pointer to the adapter structure
++ *
++ * Try to recover from a PCIe link failure by verifying
++ * the device is still present on the bus and allowing
++ * the link to stabilize after a short delay.
++ *
++ * Return: true if recovery succeeded, false otherwise.
++ */
++static bool igc_pcie_link_recover(struct igc_adapter *igc)
++{
++	struct pci_dev *pdev = igc->pdev;
++	struct net_device *netdev = igc->netdev;
++	unsigned long now = jiffies;
++	u16 val;
++
++	/* Rate limit: at most once per second */
++	if (time_before(now, igc->last_recovery_time + HZ))
++		return false;
++
++	igc->last_recovery_time = now;
++
++	/* Limit total attempts */
++	if (igc->pcie_recovery_attempts >=
++	    IGC_MAX_PCIE_RECOVERY_ATTEMPTS) {
++		netdev_err(netdev,
++			   "PCIe recovery failed after %u tries\n",
++			   igc->pcie_recovery_attempts);
++		return false;
++	}
++
++	igc->pcie_recovery_attempts++;
++
++	if (!pci_device_is_present(pdev)) {
++		netdev_err(netdev,
++			   "PCIe device gone, cannot recover\n");
++		return false;
++	}
++
++	netdev_warn(netdev,
++		    "PCIe link issue, recovery attempt #%u\n",
++		    igc->pcie_recovery_attempts);
++
++	/* Small delay to allow link to stabilize */
++	msleep(10);
++
++	/*
++	 * Verify recovery by reading vendor ID.
++	 * PCI_POSSIBLE_ERROR indicates device unreachable.
++	 */
++	if (!pci_read_config_word(pdev, PCI_VENDOR_ID,
++				  &val) &&
++	    !PCI_POSSIBLE_ERROR(val)) {
++		netdev_info(netdev,
++			    "PCIe link recovered after delay\n");
++		igc->pcie_recovery_attempts = 0;
++		return true;
++	}
++
++	return false;
++}
+ 
+ u32 igc_rd32(struct igc_hw *hw, u32 reg)
+ {
+ 	struct igc_adapter *igc = container_of(hw, struct igc_adapter, hw);
+ 	u8 __iomem *hw_addr = READ_ONCE(hw->hw_addr);
+ 	u32 value = 0;
++	int retry;
+ 
+ 	if (IGC_REMOVED(hw_addr))
+ 		return ~value;
+@@ -7001,9 +7067,38 @@
+ 	if (!(~value) && (!reg || !(~readl(hw_addr)))) {
+ 		struct net_device *netdev = igc->netdev;
+ 
++		/* Retry before giving up */
++		for (retry = 0;
++		     retry < IGC_REGISTER_READ_RETRIES;
++		     retry++) {
++			usleep_range(100, 200);
++
++			value = readl(&hw_addr[reg]);
++			if (~value ||
++			    (reg && ~readl(hw_addr))) {
++				netdev_warn(netdev,
++					    "PCIe read OK retry %d\n",
++					    retry + 1);
++				return value;
++			}
++		}
++
++		/* Retries failed, attempt full recovery */
++		if (igc_pcie_link_recover(igc)) {
++			hw_addr = READ_ONCE(hw->hw_addr);
++			if (!IGC_REMOVED(hw_addr)) {
++				value = readl(&hw_addr[reg]);
++				if (~value ||
++				    (reg && ~readl(hw_addr)))
++					return value;
++			}
++		}
++
++		/* All recovery attempts failed */
+ 		hw->hw_addr = NULL;
+ 		netif_device_detach(netdev);
+-		netdev_err(netdev, "PCIe link lost, device now detached\n");
++		netdev_err(netdev,
++			   "PCIe link lost, device detached\n");
+ 		WARN(pci_device_is_present(igc->pdev),
+ 		     "igc: Failed to read reg 0x%x!\n", reg);
+ 	}
+@@ -7175,6 +7270,9 @@
+ 	/* hw->hw_addr can be zeroed, so use adapter->io_addr for unmap */
+ 	hw->hw_addr = adapter->io_addr;
+ 
++	/* Initialize PCIe link recovery fields */
++	adapter->pcie_recovery_attempts = 0;
++	adapter->last_recovery_time = jiffies;
+ 
+ 	netdev->netdev_ops = &igc_netdev_ops;
+ 	netdev->xdp_metadata_ops = &igc_xdp_metadata_ops;
+
+diff --git a/drivers/pci/quirks.c b/drivers/pci/quirks.c
+index 167fff6f9..6aae95bc7 100644
+--- a/drivers/pci/quirks.c
++++ b/drivers/pci/quirks.c
+@@ -2511,6 +2511,44 @@
+ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x10f4, quirk_disable_aspm_l0s);
+ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x1508, quirk_disable_aspm_l0s);
+ 
++/*
++ * Intel I225/I226 Ethernet controllers may lose PCIe
++ * link stability with ASPM L0s enabled. Disable L0s
++ * while keeping L1 for power savings.
++ */
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f2,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f3,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f8,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15f7,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x3100,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x3101,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x3102,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x5502,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x5503,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x0d9f,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x125b,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x125c,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x125d,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x125e,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x125f,
++			 quirk_disable_aspm_l0s);
++DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x15fd,
++			 quirk_disable_aspm_l0s);
++
+ static void quirk_disable_aspm_l0s_l1(struct pci_dev *dev)
+ {
+ 	pcie_aspm_remove_cap(dev,
+
+-- 
+2.52.0
